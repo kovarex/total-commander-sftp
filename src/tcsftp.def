@@ -1,0 +1,24 @@
+LIBRARY tcsftp
+EXPORTS
+	FsInit
+	FsInitW
+	FsSetCryptCallbackW
+	FsSetDefaultParams
+	FsGetDefRootName
+	FsFindFirst
+	FsFindFirstW
+	FsFindNext
+	FsFindNextW
+	FsFindClose
+	FsMkDirW
+	FsRemoveDirW
+	FsDeleteFileW
+	FsRenMovFileW
+	FsGetFileW
+	FsPutFileW
+	FsSetTimeW
+	FsSetAttrW
+	FsExecuteFileW
+	FsDisconnectW
+	FsStatusInfoW
+	FsGetBackgroundFlags

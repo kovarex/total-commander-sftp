@@ -1,0 +1,5 @@
+[plugininstall]
+description=tc-sftp: open-source SFTP client with pipelined (fast) transfers
+type=wfx
+file=tcsftp.wfx64
+defaultdir=tcsftp
