@@ -21,7 +21,7 @@ jobs:
       - name: Build plugin
         run: ./build.sh
       - name: End-to-end tests under Wine
-        run: sudo WINEPREFIX=$HOME/.wine-tcsftp tests/run-tests.sh
+        run: sudo WINEPREFIX=/tmp/wine-tcsftp tests/run-tests.sh
       - uses: actions/upload-artifact@v4
         with:
           name: tcsftp
