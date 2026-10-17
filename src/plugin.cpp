@@ -308,6 +308,35 @@ static int executeRoot(HWND, WCHAR* remoteName, const std::wstring& item, const 
 
 // ---------------------------------------------------------------- transfers
 
+static void logTransferError(Session& s, const wchar_t* what, const std::wstring& name, long long done, int code) {
+	logMsg(MSGTYPE_IMPORTANTERROR, std::wstring(what) + L" of " + name + L" failed after " + std::to_wstring(done) +
+		L" bytes: " + lastErrorText(s.ssh, s.sftp) + L" (code " + std::to_wstring(code) + L")");
+}
+
+// Runs a transfer and, when the connection drops in the middle, reconnects
+// and continues from where the data ended instead of failing the copy.
+template <class F>
+static int transferWithResume(const std::wstring& name, int flags, int connectError, F transfer) {
+	std::shared_ptr<Session> s = getSession(name);
+	if (!s)
+		return connectError;
+	std::lock_guard<std::mutex> g(s->lock);
+	const int maxRetries = iniInt(L"TransferRetries", 5);
+	for (int attempt = 0;; attempt++) {
+		if (!s->alive() && !s->connect(true))
+			return connectError;
+		int rc = transfer(*s, flags);
+		if (rc == FS_FILE_OK || rc == FS_FILE_USERABORT || rc == FS_FILE_EXISTSRESUMEALLOWED || !s->connectionLost())
+			return rc;
+		s->close();
+		if (attempt >= maxRetries)
+			return rc;
+		logMsg(MSGTYPE_DETAILS, L"Connection lost, reconnecting and resuming (attempt " + std::to_wstring(attempt + 1) + L")");
+		Sleep(2000);
+		flags = (flags & FS_COPYFLAGS_MOVE) | FS_COPYFLAGS_RESUME;
+	}
+}
+
 static int downloadFile(Session& s, const std::string& remote, const std::wstring& local, int flags, RemoteInfoStruct* ri,
 	const std::wstring& remoteW) {
 	bool resume = (flags & FS_COPYFLAGS_RESUME) != 0;
@@ -345,6 +374,7 @@ static int downloadFile(Session& s, const std::string& remote, const std::wstrin
 		if (n == 0)
 			break;
 		if (n < 0) {
+			logTransferError(s, L"Download", remoteW, done, (int)n);
 			result = FS_FILE_READERROR;
 			break;
 		}
@@ -440,6 +470,7 @@ static int uploadFile(Session& s, const std::wstring& local, const std::string& 
 			break;
 		ssize_t n = libssh2_sftp_write(h, buf.data() + head, fill);
 		if (n < 0) {
+			logTransferError(s, L"Upload", remoteW, done, (int)n);
 			result = FS_FILE_WRITEERROR;
 			break;
 		}
@@ -653,17 +684,8 @@ __declspec(dllexport) int __stdcall FsGetFileW(WCHAR* remoteName, WCHAR* localNa
 	if (p.root || p.connRoot)
 		return FS_FILE_NOTSUPPORTED;
 	std::wstring local = localName, remoteW = remoteName;
-	// A transfer that failed half-way is not retried automatically, since it may have written data.
-	std::shared_ptr<Session> s = getSession(p.name);
-	if (!s)
-		return FS_FILE_READERROR;
-	std::lock_guard<std::mutex> g(s->lock);
-	if (!s->alive() && !s->connect(true))
-		return FS_FILE_READERROR;
-	int rc = downloadFile(*s, p.remote, local, flags, ri, remoteW);
-	if (rc != FS_FILE_OK && s->connectionLost())
-		s->close();
-	return rc;
+	return transferWithResume(p.name, flags, FS_FILE_READERROR,
+		[&](Session& s, int f) { return downloadFile(s, p.remote, local, f, ri, remoteW); });
 }
 
 __declspec(dllexport) int __stdcall FsPutFileW(WCHAR* localName, WCHAR* remoteName, int flags) {
@@ -671,16 +693,8 @@ __declspec(dllexport) int __stdcall FsPutFileW(WCHAR* localName, WCHAR* remoteNa
 	if (p.root || p.connRoot)
 		return FS_FILE_NOTSUPPORTED;
 	std::wstring local = localName, remoteW = remoteName;
-	std::shared_ptr<Session> s = getSession(p.name);
-	if (!s)
-		return FS_FILE_WRITEERROR;
-	std::lock_guard<std::mutex> g(s->lock);
-	if (!s->alive() && !s->connect(true))
-		return FS_FILE_WRITEERROR;
-	int rc = uploadFile(*s, local, p.remote, flags, remoteW);
-	if (rc != FS_FILE_OK && s->connectionLost())
-		s->close();
-	return rc;
+	return transferWithResume(p.name, flags, FS_FILE_WRITEERROR,
+		[&](Session& s, int f) { return uploadFile(s, local, p.remote, f, remoteW); });
 }
 
 __declspec(dllexport) BOOL __stdcall FsSetTimeW(WCHAR* path, FILETIME* creation, FILETIME* access, FILETIME* write) {

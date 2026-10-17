@@ -36,6 +36,7 @@ Open `tcsftp.zip` in Total Commander (Enter on the file) and confirm the plugin 
 - Commands typed in Total Commander's command line run on the server in the current directory, and their output is shown.
 - Unix permissions are shown and can be changed with **Files → Change Attributes**.
 - Background transfers (the **Background** button in the copy dialog) use a separate connection.
+- If the connection drops during a transfer, the plugin reconnects and continues where the data ended. Failures are written to Total Commander's FTP log with the reason.
 
 ## Settings
 
@@ -45,6 +46,7 @@ Connections and settings live in `tcsftp.ini` next to `wincmd.ini`. Optional `[G
 |---|---|---|
 | `WindowKB` | 2048 | Data kept in flight per transfer (KB). Raise it for fast links with long round trips. |
 | `TimeoutSeconds` | 60 | Network timeout. |
+| `TransferRetries` | 5 | How many times a transfer reconnects and resumes after the connection drops. |
 | `FileMode` | 644 | Permissions for new files (octal). |
 | `DirMode` | 755 | Permissions for new directories (octal). |
 

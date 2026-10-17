@@ -5,7 +5,8 @@
 #include <string>
 #include "../src/wfx.h"
 
-static int __stdcall progressW(int, WCHAR*, WCHAR*, int) { return 0; }
+static DWORD g_t0 = GetTickCount(); static int g_last = -1;
+static int __stdcall progressW(int, WCHAR*, WCHAR*, int p) { if (getenv("TRACE") && p != g_last) { printf("  progress %3d%% at %.2fs\n", p, (GetTickCount() - g_t0) / 1000.0); g_last = p; } return 0; }
 static void __stdcall logW(int, int type, WCHAR* s) { wprintf(L"  [log %d] %ls\n", type, s); }
 static BOOL __stdcall requestW(int, int type, WCHAR*, WCHAR* text, WCHAR* ret, int maxlen) {
 	wprintf(L"  [request %d] %ls\n", type, text ? text : L"");
@@ -13,8 +14,10 @@ static BOOL __stdcall requestW(int, int type, WCHAR*, WCHAR* text, WCHAR* ret, i
 		// trust the host key, decline saving passwords
 		return text && wcsstr(text, L"Trust") ? TRUE : FALSE;
 	}
-	if (type == RT_MsgOK)
+	if (type == RT_MsgOK) {
+		if (text && wcsstr(text, L"SAME")) printf("PASS remote file identical to local\n");
 		return TRUE;
+	}
 	return FALSE;
 }
 
@@ -52,7 +55,7 @@ static int listDir(FsFindFirstW_t ff, FsFindNextW_t fn, FsFindClose_t fc, const 
 }
 
 int wmain(int argc, wchar_t** argv) {
-	if (argc < 6) { printf("usage\n"); return 2; }
+	if (argc < 7) { printf("usage\n"); return 2; }
 	HMODULE m = LoadLibraryW(argv[1]);
 	if (!m) { printf("LoadLibrary failed %lu\n", GetLastError()); return 1; }
 #define GET(n) auto n = (n##_t)GetProcAddress(m, #n); if (!n) { printf("missing " #n "\n"); return 1; }
@@ -83,9 +86,23 @@ int wmain(int argc, wchar_t** argv) {
 	LARGE_INTEGER sz; GetFileSizeEx(lf, &sz); CloseHandle(lf);
 	printf("  upload %.1f MB in %.2f s = %.2f Mbit/s\n", sz.QuadPart / 1e6, (t1 - t0) / 1000.0, sz.QuadPart * 8.0 / ((t1 - t0) / 1000.0) / 1e6);
 	check(rc == FS_FILE_OK, "upload");
+	{
+		std::wstring cmp = L"quote cmp wine-up.bin " + std::wstring(argv[6]) + L" && echo SAME";
+		std::wstring dirPath = base;
+		FsExecuteFileW(0, dirPath.data(), cmp.data());
+	}
 	check(FsPutFileW(local.data(), rfile.data(), 0) == FS_FILE_EXISTSRESUMEALLOWED, "upload onto existing file asks");
 	check(FsPutFileW(local.data(), rfile.data(), FS_COPYFLAGS_OVERWRITE) == FS_FILE_OK, "upload overwrite");
 
+	{
+		// resume: cut the remote file short through the plugin's own server-side command, then resume
+		std::wstring cut = L"quote truncate -s 3000001 wine-up.bin";
+		std::wstring dirPath = base;
+		FsExecuteFileW(0, dirPath.data(), cut.data());
+		check(FsPutFileW(local.data(), rfile.data(), FS_COPYFLAGS_RESUME) == FS_FILE_OK, "resume upload");
+		std::wstring cmp = L"quote cmp wine-up.bin " + std::wstring(argv[6]) + L" && echo SAME";
+		FsExecuteFileW(0, dirPath.data(), cmp.data());
+	}
 	WIN32_FIND_DATAW fd = {};
 	listDir(FsFindFirstW, FsFindNextW, FsFindClose, base, L"wine-up.bin", &fd);
 	check(((long long)fd.nFileSizeHigh << 32 | fd.nFileSizeLow) == sz.QuadPart, "listing shows uploaded size");

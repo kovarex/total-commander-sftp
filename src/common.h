@@ -13,7 +13,7 @@
 #include "wfx.h"
 
 #define PLUGIN_NAME L"tc-sftp"
-#define PLUGIN_VERSION L"0.1"
+#define PLUGIN_VERSION L"0.2"
 
 // Callbacks and settings handed to us by Total Commander.
 struct Host {
