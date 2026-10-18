@@ -16,7 +16,9 @@ chmod 777 "$WORK"
 /usr/sbin/sshd -p 2222 -o ListenAddress=127.0.0.1 -o PidFile="$WORK/sshd.pid"
 # the first connection is cut 5 MB into the upload, so the test also covers reconnect + resume
 python3 "$ROOT/tests/lagproxy.py" 2200 2222 55 8 100 5000000 & PROXY=$!
-trap 'kill $PROXY; [ -f "$WORK/sshd.pid" ] && kill "$(cat "$WORK/sshd.pid")"' EXIT
+# a line that freezes every 1.5 MB, so one upload needs many reconnects in a row
+python3 "$ROOT/tests/lagproxy.py" 2201 2222 55 8 100 1500000 stall & STALLPROXY=$!
+trap 'kill $PROXY $STALLPROXY; [ -f "$WORK/sshd.pid" ] && kill "$(cat "$WORK/sshd.pid")"' EXIT
 for i in $(seq 1 500); do : > "$WORK/many/f$i.txt"; done
 head -c 10000000 /dev/urandom > "$WORK/f10m"
 # printf, not echo: dash's echo would turn "\t" in the paths into tabs
@@ -26,3 +28,16 @@ printf '[test]\r\nhost=127.0.0.1\r\nport=2200\r\nuser=tcsftptest\r\nkeyfile=%s\r
 sleep 1
 WINEDEBUG=-all wine "$ROOT/build/harness.exe" "$(w "$ROOT/build/tcsftp.wfx64")" "$(w "$WORK/ini")" test \
 	"$(printf '%s' "$WORK" | tr / '\\')" "$(w "$WORK/f10m")" "$WORK/f10m"
+
+echo "--- upload over a line that stalls every 1.5 MB"
+mkdir -p "$WORK/ini-stall"
+printf '[General]\r\nTimeoutSeconds=3\r\n[stall]\r\nhost=127.0.0.1\r\nport=2201\r\nuser=tcsftptest\r\nkeyfile=%s\r\n' "$WKEY" > "$WORK/ini-stall/tcsftp.ini"
+cp "$WORK/ini/tcsftp_known_hosts" "$WORK/ini-stall/" 2>/dev/null || true
+UPLOAD_ONLY=1 WINEDEBUG=-all wine "$ROOT/build/harness.exe" "$(w "$ROOT/build/tcsftp.wfx64")" "$(w "$WORK/ini-stall")" stall \
+	"$(printf '%s' "$WORK" | tr / '\\')" "$(w "$WORK/f10m")" "$WORK/f10m" | tee "$WORK/stall.out"
+RECONNECTS=$(grep -c "Reconnecting and resuming" "$WORK/stall.out" || true)
+if cmp -s "$WORK/wine-up.bin" "$WORK/f10m" && [ "$RECONNECTS" -gt 5 ]; then
+	echo "PASS upload finished identical after $RECONNECTS reconnects"
+else
+	echo "FAIL upload over stalling line ($RECONNECTS reconnects)"; exit 1
+fi

@@ -298,6 +298,15 @@ void Session::close() {
 	}
 }
 
+void Session::abort() {
+	// With the socket closed first, libssh2's goodbye messages fail at once instead of waiting out the timeout.
+	if (sock != INVALID_SOCKET) {
+		closesocket(sock);
+		sock = INVALID_SOCKET;
+	}
+	close();
+}
+
 int Session::lastSftpError() const {
 	if (!ssh)
 		return LIBSSH2_ERROR_SOCKET_DISCONNECT;
@@ -495,6 +504,13 @@ static bool tryKeyFile(Session& s, const std::string& user, const std::wstring& 
 	int rc = libssh2_userauth_publickey_frommemory(s.ssh, user.c_str(), user.size(), nullptr, 0, priv.data(), priv.size(), "");
 	if (rc == 0)
 		return true;
+	if (askPassphrase && !s.passphrase.empty()) {
+		std::string p = toUtf8(s.passphrase);
+		rc = libssh2_userauth_publickey_frommemory(s.ssh, user.c_str(), user.size(), nullptr, 0, priv.data(), priv.size(), p.c_str());
+		SecureZeroMemory(p.data(), p.size());
+		if (rc == 0)
+			return true;
+	}
 	if (!interactive || !askPassphrase)
 		return false;
 	for (int attempt = 0; attempt < 3; attempt++) {
@@ -504,8 +520,10 @@ static bool tryKeyFile(Session& s, const std::string& user, const std::wstring& 
 		std::string p = toUtf8(pass);
 		rc = libssh2_userauth_publickey_frommemory(s.ssh, user.c_str(), user.size(), nullptr, 0, priv.data(), priv.size(), p.c_str());
 		SecureZeroMemory(p.data(), p.size());
-		if (rc == 0)
+		if (rc == 0) {
+			s.passphrase = pass;
 			return true;
+		}
 	}
 	return false;
 }
@@ -644,7 +662,7 @@ bool Session::connect(bool interactive) {
 	}
 	ssh = libssh2_session_init();
 	libssh2_session_set_blocking(ssh, 1);
-	libssh2_session_set_timeout(ssh, iniInt(L"TimeoutSeconds", 60) * 1000);
+	libssh2_session_set_timeout(ssh, iniInt(L"TimeoutSeconds", 30) * 1000);
 	if (libssh2_session_handshake(ssh, (libssh2_socket_t)sock) != 0) {
 		if (interactive)
 			message(PLUGIN_NAME, L"SSH handshake failed: " + lastErrorText(ssh, nullptr));

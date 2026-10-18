@@ -13,7 +13,7 @@
 #include "wfx.h"
 
 #define PLUGIN_NAME L"tc-sftp"
-#define PLUGIN_VERSION L"0.4"
+#define PLUGIN_VERSION L"0.5"
 
 // Callbacks and settings handed to us by Total Commander.
 struct Host {
@@ -73,8 +73,10 @@ struct Session {
 	std::string home;          // remote home directory (UTF-8)
 	std::mutex lock;
 	std::wstring password;     // kept in memory for reconnects only
+	std::wstring passphrase;   // same, for the key file
 	~Session();
 	void close();
+	void abort();               // close without talking to a server that may be unreachable
 	bool connect(bool interactive);
 	bool alive() const { return sftp != nullptr; }
 	int lastSftpError() const;

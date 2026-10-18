@@ -312,6 +312,8 @@ static int executeRoot(HWND, WCHAR* remoteName, const std::wstring& item, const 
 static thread_local bool t_resumable = false;
 // Last reason a transfer failed, shown to the user when we give up (TC itself only gets a result code).
 static thread_local std::wstring t_lastError;
+// Set when the current attempt moved any data, so a flaky line that keeps making progress is never given up on.
+static thread_local bool t_progressMade = false;
 
 static void logTransferError(Session& s, const wchar_t* what, const std::wstring& name, long long done, int code) {
 	unsigned long status = s.sftp ? libssh2_sftp_last_error(s.sftp) : 0;
@@ -332,31 +334,45 @@ static int transferWithResume(const std::wstring& name, int flags, int connectEr
 	if (!s)
 		return connectError;
 	std::lock_guard<std::mutex> g(s->lock);
-	const int maxRetries = iniInt(L"TransferRetries", 5);
-	for (int attempt = 0;; attempt++) {
-		if (!s->alive() && !s->connect(true)) {
+	// Retries are counted only for attempts in a row that moved no data at all: a bad line
+	// that stalls every few minutes but keeps going still finishes the transfer.
+	const int maxRetries = iniInt(L"TransferRetries", 10);
+	int idleAttempts = 0;
+	for (int attempt = 1;; attempt++) {
+		int rc = connectError;
+		bool retry = true;
+		// Reconnects run without dialogs: the password and key passphrase are remembered from the first login.
+		if (!s->alive() && !s->connect(attempt == 1)) {
 			logMsg(MSGTYPE_IMPORTANTERROR, L"Reconnect to " + s->cfg.host + L" failed");
-			if (attempt > 0)
-				message(PLUGIN_NAME, t_lastError + L"\n\nReconnecting to " + s->cfg.host + L" failed.");
-			return connectError;
+			if (attempt == 1)
+				return connectError;
+			if (t_lastError.empty())
+				t_lastError = L"Reconnecting to " + s->cfg.host + L" failed.";
+			idleAttempts++;
+		} else {
+			t_resumable = false;
+			t_progressMade = false;
+			t_lastError.clear();
+			rc = transfer(*s, flags);
+			if (rc == FS_FILE_OK || rc == FS_FILE_USERABORT || rc == FS_FILE_EXISTSRESUMEALLOWED)
+				return rc;
+			retry = t_resumable || s->connectionLost();
+			idleAttempts = t_progressMade ? 0 : idleAttempts + 1;
+			// The session may be half-broken after a failed write; start the next attempt on a fresh one.
+			s->abort();
 		}
-		t_resumable = false;
-		t_lastError.clear();
-		int rc = transfer(*s, flags);
-		if (rc == FS_FILE_OK || rc == FS_FILE_USERABORT || rc == FS_FILE_EXISTSRESUMEALLOWED)
-			return rc;
-		bool retry = t_resumable || s->connectionLost();
-		// The session may be half-broken after a failed write; start the next attempt on a fresh one.
-		s->close();
-		if (!retry || attempt >= maxRetries) {
+		if (!retry || idleAttempts > maxRetries) {
 			logMsg(MSGTYPE_IMPORTANTERROR, L"Giving up on " + std::wstring(retry ? L"transfer after retries" : L"transfer") +
 				L", result " + std::to_wstring(rc));
 			if (!t_lastError.empty())
-				message(PLUGIN_NAME, t_lastError + (retry ? L"\n\nGave up after " + std::to_wstring(attempt) + L" reconnect attempts." : L""));
+				message(PLUGIN_NAME, t_lastError + (retry ? L"\n\nGave up after " + std::to_wstring(idleAttempts) +
+					L" attempts in a row that moved no data." : L""));
 			return rc;
 		}
-		logMsg(MSGTYPE_IMPORTANTERROR, L"Reconnecting and resuming (attempt " + std::to_wstring(attempt + 1) + L")");
-		Sleep(2000);
+		logMsg(MSGTYPE_IMPORTANTERROR, L"Reconnecting and resuming (attempt " + std::to_wstring(attempt) + L")");
+		// Right after an attempt that moved data, reconnect at once; when the line is down, back off up to 15 s.
+		if (idleAttempts)
+			Sleep(1000 * std::min(15, 3 * idleAttempts));
 		flags = (flags & FS_COPYFLAGS_MOVE) | FS_COPYFLAGS_RESUME;
 	}
 }
@@ -408,6 +424,7 @@ static int downloadFile(Session& s, const std::string& remote, const std::wstrin
 			break;
 		}
 		done += n;
+		t_progressMade = true;
 		if (progress(remoteW, local, percentOf(done, total)))
 			result = FS_FILE_USERABORT;
 	}
@@ -503,6 +520,8 @@ static int uploadFile(Session& s, const std::wstring& local, const std::string& 
 		head += (size_t)n;
 		fill -= (size_t)n;
 		done += n;
+		if (n > 0)
+			t_progressMade = true;
 		if (progress(local, remoteW, percentOf(done, total)))
 			result = FS_FILE_USERABORT;
 	}

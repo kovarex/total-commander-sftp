@@ -6,6 +6,9 @@ UP = float(sys.argv[4]) * 1e6 / 8          # client->server bytes/s
 DOWN = float(sys.argv[5]) * 1e6 / 8        # server->client bytes/s
 # optional: cut the first connection after this many client->server bytes (tests reconnects)
 DROP_AFTER = int(sys.argv[6]) if len(sys.argv) > 6 else 0
+# optional mode: "first" cuts only the first connection, "stall" freezes every
+# connection after DROP_AFTER bytes without closing it, like a dead link
+MODE = sys.argv[7] if len(sys.argv) > 7 else "first"
 dropped = False
 
 async def pump(reader, writer, rate, limit=0, peer=None):
@@ -26,6 +29,8 @@ async def pump(reader, writer, rate, limit=0, peer=None):
         data = await reader.read(16384)
         total += len(data)
         if limit and not dropped and total > limit:
+            if MODE == "stall":
+                await asyncio.sleep(3600); return
             dropped = True
             writer.transport.abort(); peer.transport.abort()
             return

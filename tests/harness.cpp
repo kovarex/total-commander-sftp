@@ -91,6 +91,8 @@ int wmain(int argc, wchar_t** argv) {
 		std::wstring dirPath = base;
 		FsExecuteFileW(0, dirPath.data(), cmp.data());
 	}
+	if (getenv("UPLOAD_ONLY"))
+		return failures ? 1 : 0;
 	check(FsPutFileW(local.data(), rfile.data(), 0) == FS_FILE_EXISTSRESUMEALLOWED, "upload onto existing file asks");
 	check(FsPutFileW(local.data(), rfile.data(), FS_COPYFLAGS_OVERWRITE) == FS_FILE_OK, "upload overwrite");
 

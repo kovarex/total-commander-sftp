@@ -36,7 +36,7 @@ Open `tcsftp.zip` in Total Commander (Enter on the file) and confirm the plugin 
 - Commands typed in Total Commander's command line run on the server in the current directory, and their output is shown.
 - Unix permissions are shown and can be changed with **Files → Change Attributes**.
 - Background transfers (the **Background** button in the copy dialog) use a separate connection.
-- If the connection drops during a transfer, the plugin reconnects and continues where the data ended. Failures and retries are written with their reason to Total Commander's log window and to `tcsftp.log` next to `wincmd.ini`.
+- If the connection drops or freezes during a transfer, the plugin reconnects and continues where the data ended, as many times as needed while data keeps moving. Failures and retries are written with their reason to Total Commander's log window and to `tcsftp.log` next to `wincmd.ini`.
 
 ## Settings
 
@@ -45,8 +45,8 @@ Connections and settings live in `tcsftp.ini` next to `wincmd.ini`. Optional `[G
 | Key | Default | Meaning |
 |---|---|---|
 | `WindowKB` | 2048 | Data kept in flight per transfer (KB). Raise it for fast links with long round trips. |
-| `TimeoutSeconds` | 60 | Network timeout. |
-| `TransferRetries` | 5 | How many times a transfer reconnects and resumes after the connection drops. |
+| `TimeoutSeconds` | 30 | How long the connection may go silent before the plugin treats it as dead and reconnects. |
+| `TransferRetries` | 10 | A transfer keeps reconnecting and resuming as long as each attempt moves data. It gives up after this many attempts in a row that move nothing. |
 | `FileMode` | 644 | Permissions for new files (octal). |
 | `DirMode` | 755 | Permissions for new directories (octal). |
 
