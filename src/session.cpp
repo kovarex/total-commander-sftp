@@ -107,10 +107,32 @@ std::wstring lastErrorText(LIBSSH2_SESSION* ssh, LIBSSH2_SFTP* sftp) {
 
 // ---------------------------------------------------------------- dialogs
 
+// Everything except routine details also goes to tcsftp.log next to the ini,
+// because Total Commander's own log window is easy to miss and gone after disconnect.
 void logMsg(int type, const std::wstring& text) {
 	if (g_host.log) {
 		std::wstring t = text;
 		g_host.log(g_host.pluginNr, type, t.data());
+	}
+	if (g_host.iniDir.empty())
+		return;
+	static std::mutex fileLock;
+	std::lock_guard<std::mutex> g(fileLock);
+	std::wstring path = g_host.iniDir + L"tcsftp.log";
+	WIN32_FILE_ATTRIBUTE_DATA info;
+	if (GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &info) && info.nFileSizeLow > 1024 * 1024) {
+		std::wstring old = path + L".old";
+		MoveFileExW(path.c_str(), old.c_str(), MOVEFILE_REPLACE_EXISTING);
+	}
+	if (FILE* f = _wfopen(path.c_str(), L"ab")) {
+		SYSTEMTIME st;
+		GetLocalTime(&st);
+		char stamp[64];
+		snprintf(stamp, sizeof(stamp), "%04d-%02d-%02d %02d:%02d:%02d [%lu] ", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute,
+			st.wSecond, GetCurrentThreadId());
+		std::string line = stamp + toUtf8(text) + "\r\n";
+		fwrite(line.data(), 1, line.size(), f);
+		fclose(f);
 	}
 }
 

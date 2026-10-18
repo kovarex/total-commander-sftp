@@ -308,9 +308,18 @@ static int executeRoot(HWND, WCHAR* remoteName, const std::wstring& item, const 
 
 // ---------------------------------------------------------------- transfers
 
+// Set when a transfer failed after data started flowing, so reconnecting and resuming makes sense.
+static thread_local bool t_resumable = false;
+
 static void logTransferError(Session& s, const wchar_t* what, const std::wstring& name, long long done, int code) {
+	unsigned long status = s.sftp ? libssh2_sftp_last_error(s.sftp) : 0;
 	logMsg(MSGTYPE_IMPORTANTERROR, std::wstring(what) + L" of " + name + L" failed after " + std::to_wstring(done) +
-		L" bytes: " + lastErrorText(s.ssh, s.sftp) + L" (code " + std::to_wstring(code) + L")");
+		L" bytes: " + lastErrorText(s.ssh, s.sftp) + L" (code " + std::to_wstring(code) + L", sftp status " +
+		std::to_wstring(status) + L")");
+	// Server-side refusals won't go away by reconnecting.
+	t_resumable = !(code == LIBSSH2_ERROR_SFTP_PROTOCOL &&
+		(status == LIBSSH2_FX_PERMISSION_DENIED || status == LIBSSH2_FX_NO_SPACE_ON_FILESYSTEM ||
+			status == LIBSSH2_FX_QUOTA_EXCEEDED || status == LIBSSH2_FX_WRITE_PROTECT));
 }
 
 // Runs a transfer and, when the connection drops in the middle, reconnects
@@ -323,15 +332,23 @@ static int transferWithResume(const std::wstring& name, int flags, int connectEr
 	std::lock_guard<std::mutex> g(s->lock);
 	const int maxRetries = iniInt(L"TransferRetries", 5);
 	for (int attempt = 0;; attempt++) {
-		if (!s->alive() && !s->connect(true))
+		if (!s->alive() && !s->connect(true)) {
+			logMsg(MSGTYPE_IMPORTANTERROR, L"Reconnect to " + s->cfg.host + L" failed");
 			return connectError;
+		}
+		t_resumable = false;
 		int rc = transfer(*s, flags);
-		if (rc == FS_FILE_OK || rc == FS_FILE_USERABORT || rc == FS_FILE_EXISTSRESUMEALLOWED || !s->connectionLost())
+		if (rc == FS_FILE_OK || rc == FS_FILE_USERABORT || rc == FS_FILE_EXISTSRESUMEALLOWED)
 			return rc;
+		bool retry = t_resumable || s->connectionLost();
+		// The session may be half-broken after a failed write; start the next attempt on a fresh one.
 		s->close();
-		if (attempt >= maxRetries)
+		if (!retry || attempt >= maxRetries) {
+			logMsg(MSGTYPE_IMPORTANTERROR, L"Giving up on " + std::wstring(retry ? L"transfer after retries" : L"transfer") +
+				L", result " + std::to_wstring(rc));
 			return rc;
-		logMsg(MSGTYPE_DETAILS, L"Connection lost, reconnecting and resuming (attempt " + std::to_wstring(attempt + 1) + L")");
+		}
+		logMsg(MSGTYPE_IMPORTANTERROR, L"Reconnecting and resuming (attempt " + std::to_wstring(attempt + 1) + L")");
 		Sleep(2000);
 		flags = (flags & FS_COPYFLAGS_MOVE) | FS_COPYFLAGS_RESUME;
 	}
@@ -459,6 +476,7 @@ static int uploadFile(Session& s, const std::wstring& local, const std::string& 
 			}
 			DWORD got = 0;
 			if (!ReadFile(f, buf.data() + fill, (DWORD)(window - fill), &got, nullptr)) {
+				logMsg(MSGTYPE_IMPORTANTERROR, L"Reading local file " + local + L" failed, Windows error " + std::to_wstring(GetLastError()));
 				result = FS_FILE_READERROR;
 				break;
 			}
@@ -481,8 +499,10 @@ static int uploadFile(Session& s, const std::wstring& local, const std::string& 
 			result = FS_FILE_USERABORT;
 	}
 	CloseHandle(f);
-	if (libssh2_sftp_close(h) != 0 && result == FS_FILE_OK)
+	if (libssh2_sftp_close(h) != 0 && result == FS_FILE_OK) {
+		logTransferError(s, L"Closing upload", remoteW, done, libssh2_session_last_errno(s.ssh));
 		result = FS_FILE_WRITEERROR;
+	}
 	if (result == FS_FILE_OK) {
 		progress(local, remoteW, 100);
 		if (flags & FS_COPYFLAGS_MOVE)
