@@ -310,12 +310,14 @@ static int executeRoot(HWND, WCHAR* remoteName, const std::wstring& item, const 
 
 // Set when a transfer failed after data started flowing, so reconnecting and resuming makes sense.
 static thread_local bool t_resumable = false;
+// Last reason a transfer failed, shown to the user when we give up (TC itself only gets a result code).
+static thread_local std::wstring t_lastError;
 
 static void logTransferError(Session& s, const wchar_t* what, const std::wstring& name, long long done, int code) {
 	unsigned long status = s.sftp ? libssh2_sftp_last_error(s.sftp) : 0;
-	logMsg(MSGTYPE_IMPORTANTERROR, std::wstring(what) + L" of " + name + L" failed after " + std::to_wstring(done) +
-		L" bytes: " + lastErrorText(s.ssh, s.sftp) + L" (code " + std::to_wstring(code) + L", sftp status " +
-		std::to_wstring(status) + L")");
+	t_lastError = std::wstring(what) + L" of " + name + L" failed after " + std::to_wstring(done) + L" bytes: " +
+		lastErrorText(s.ssh, s.sftp) + L" (code " + std::to_wstring(code) + L", sftp status " + std::to_wstring(status) + L")";
+	logMsg(MSGTYPE_IMPORTANTERROR, t_lastError);
 	// Server-side refusals won't go away by reconnecting.
 	t_resumable = !(code == LIBSSH2_ERROR_SFTP_PROTOCOL &&
 		(status == LIBSSH2_FX_PERMISSION_DENIED || status == LIBSSH2_FX_NO_SPACE_ON_FILESYSTEM ||
@@ -334,9 +336,12 @@ static int transferWithResume(const std::wstring& name, int flags, int connectEr
 	for (int attempt = 0;; attempt++) {
 		if (!s->alive() && !s->connect(true)) {
 			logMsg(MSGTYPE_IMPORTANTERROR, L"Reconnect to " + s->cfg.host + L" failed");
+			if (attempt > 0)
+				message(PLUGIN_NAME, t_lastError + L"\n\nReconnecting to " + s->cfg.host + L" failed.");
 			return connectError;
 		}
 		t_resumable = false;
+		t_lastError.clear();
 		int rc = transfer(*s, flags);
 		if (rc == FS_FILE_OK || rc == FS_FILE_USERABORT || rc == FS_FILE_EXISTSRESUMEALLOWED)
 			return rc;
@@ -346,6 +351,8 @@ static int transferWithResume(const std::wstring& name, int flags, int connectEr
 		if (!retry || attempt >= maxRetries) {
 			logMsg(MSGTYPE_IMPORTANTERROR, L"Giving up on " + std::wstring(retry ? L"transfer after retries" : L"transfer") +
 				L", result " + std::to_wstring(rc));
+			if (!t_lastError.empty())
+				message(PLUGIN_NAME, t_lastError + (retry ? L"\n\nGave up after " + std::to_wstring(attempt) + L" reconnect attempts." : L""));
 			return rc;
 		}
 		logMsg(MSGTYPE_IMPORTANTERROR, L"Reconnecting and resuming (attempt " + std::to_wstring(attempt + 1) + L")");
@@ -476,7 +483,8 @@ static int uploadFile(Session& s, const std::wstring& local, const std::string& 
 			}
 			DWORD got = 0;
 			if (!ReadFile(f, buf.data() + fill, (DWORD)(window - fill), &got, nullptr)) {
-				logMsg(MSGTYPE_IMPORTANTERROR, L"Reading local file " + local + L" failed, Windows error " + std::to_wstring(GetLastError()));
+				t_lastError = L"Reading local file " + local + L" failed, Windows error " + std::to_wstring(GetLastError());
+				logMsg(MSGTYPE_IMPORTANTERROR, t_lastError);
 				result = FS_FILE_READERROR;
 				break;
 			}
