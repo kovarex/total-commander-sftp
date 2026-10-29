@@ -312,8 +312,11 @@ static int executeRoot(HWND, WCHAR* remoteName, const std::wstring& item, const 
 static thread_local bool t_resumable = false;
 // Last reason a transfer failed, shown to the user when we give up (TC itself only gets a result code).
 static thread_local std::wstring t_lastError;
-// Set when the current attempt moved any data, so a flaky line that keeps making progress is never given up on.
-static thread_local bool t_progressMade = false;
+// Furthest file offset the current attempt got to. An attempt counts as progress only when it gets
+// clearly further than every earlier one, so a flaky line that keeps going is never given up on,
+// while a server that refuses the same spot over and over is.
+static thread_local long long t_reached = -1;
+static const long long MIN_PROGRESS = 1 << 20;
 
 static void logTransferError(Session& s, const wchar_t* what, const std::wstring& name, long long done, int code) {
 	unsigned long status = s.sftp ? libssh2_sftp_last_error(s.sftp) : 0;
@@ -338,6 +341,7 @@ static int transferWithResume(const std::wstring& name, int flags, int connectEr
 	// that stalls every few minutes but keeps going still finishes the transfer.
 	const int maxRetries = iniInt(L"TransferRetries", 10);
 	int idleAttempts = 0;
+	long long best = -1;
 	for (int attempt = 1;; attempt++) {
 		int rc = connectError;
 		bool retry = true;
@@ -351,13 +355,15 @@ static int transferWithResume(const std::wstring& name, int flags, int connectEr
 			idleAttempts++;
 		} else {
 			t_resumable = false;
-			t_progressMade = false;
+			t_reached = -1;
 			t_lastError.clear();
 			rc = transfer(*s, flags);
 			if (rc == FS_FILE_OK || rc == FS_FILE_USERABORT || rc == FS_FILE_EXISTSRESUMEALLOWED)
 				return rc;
 			retry = t_resumable || s->connectionLost();
-			idleAttempts = t_progressMade ? 0 : idleAttempts + 1;
+			bool progressed = t_reached > best && (best < 0 || t_reached - best >= MIN_PROGRESS);
+			best = std::max(best, t_reached);
+			idleAttempts = progressed ? 0 : idleAttempts + 1;
 			// The session may be half-broken after a failed write; start the next attempt on a fresh one.
 			s->abort();
 		}
@@ -366,7 +372,7 @@ static int transferWithResume(const std::wstring& name, int flags, int connectEr
 				L", result " + std::to_wstring(rc));
 			if (!t_lastError.empty())
 				message(PLUGIN_NAME, t_lastError + (retry ? L"\n\nGave up after " + std::to_wstring(idleAttempts) +
-					L" attempts in a row that moved no data." : L""));
+					L" attempts in a row that got no further." : L""));
 			return rc;
 		}
 		logMsg(MSGTYPE_IMPORTANTERROR, L"Reconnecting and resuming (attempt " + std::to_wstring(attempt) + L")");
@@ -424,7 +430,7 @@ static int downloadFile(Session& s, const std::string& remote, const std::wstrin
 			break;
 		}
 		done += n;
-		t_progressMade = true;
+		t_reached = done;
 		if (progress(remoteW, local, percentOf(done, total)))
 			result = FS_FILE_USERABORT;
 	}
@@ -521,7 +527,7 @@ static int uploadFile(Session& s, const std::wstring& local, const std::string& 
 		fill -= (size_t)n;
 		done += n;
 		if (n > 0)
-			t_progressMade = true;
+			t_reached = done;
 		if (progress(local, remoteW, percentOf(done, total)))
 			result = FS_FILE_USERABORT;
 	}

@@ -46,7 +46,7 @@ Connections and settings live in `tcsftp.ini` next to `wincmd.ini`. Optional `[G
 |---|---|---|
 | `WindowKB` | 2048 | Data kept in flight per transfer (KB). Raise it for fast links with long round trips. |
 | `TimeoutSeconds` | 30 | How long the connection may go silent before the plugin treats it as dead and reconnects. |
-| `TransferRetries` | 10 | A transfer keeps reconnecting and resuming as long as each attempt moves data. It gives up after this many attempts in a row that move nothing. |
+| `TransferRetries` | 10 | A transfer keeps reconnecting and resuming as long as each attempt gets at least 1 MB further than any earlier one. It gives up after this many attempts in a row that get no further (e.g. the server refuses the same spot every time). |
 | `FileMode` | 644 | Permissions for new files (octal). |
 | `DirMode` | 755 | Permissions for new directories (octal). |
 

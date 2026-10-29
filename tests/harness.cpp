@@ -85,6 +85,10 @@ int wmain(int argc, wchar_t** argv) {
 	HANDLE lf = CreateFileW(local.c_str(), GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, 0, 0);
 	LARGE_INTEGER sz; GetFileSizeEx(lf, &sz); CloseHandle(lf);
 	printf("  upload %.1f MB in %.2f s = %.2f Mbit/s\n", sz.QuadPart / 1e6, (t1 - t0) / 1000.0, sz.QuadPart * 8.0 / ((t1 - t0) / 1000.0) / 1e6);
+	if (getenv("EXPECT_UPLOAD_FAIL")) {
+		check(rc != FS_FILE_OK, "upload refused by the server fails instead of retrying forever");
+		return failures ? 1 : 0;
+	}
 	check(rc == FS_FILE_OK, "upload");
 	{
 		std::wstring cmp = L"quote cmp wine-up.bin " + std::wstring(argv[6]) + L" && echo SAME";
