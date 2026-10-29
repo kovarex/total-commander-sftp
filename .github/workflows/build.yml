@@ -7,6 +7,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - name: Install tools
@@ -26,3 +28,14 @@ jobs:
         with:
           name: tcsftp
           path: build/tcsftp.zip
+      # Each new PLUGIN_VERSION that lands on main becomes a GitHub release with the zip attached.
+      - name: Release new version
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(sed -n 's/.*PLUGIN_VERSION L"\(.*\)".*/\1/p' src/common.h)
+          if ! gh release view "v$VERSION" >/dev/null 2>&1; then
+            cp build/tcsftp.zip "build/tcsftp-$VERSION.zip"
+            gh release create "v$VERSION" "build/tcsftp-$VERSION.zip" --title "tcsftp $VERSION" --generate-notes --target "$GITHUB_SHA"
+          fi

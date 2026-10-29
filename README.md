@@ -24,7 +24,7 @@ Other round-trip savings:
 
 ## Install
 
-Open `tcsftp.zip` in Total Commander (Enter on the file) and confirm the plugin installation. It appears under **Network Neighborhood** as **tc-sftp**.
+Download the zip of the latest version from [Releases](https://github.com/kovarex/total-commander-sftp/releases/latest), open it in Total Commander (Enter on the file) and confirm the plugin installation. It appears under **Network Neighborhood** as **tc-sftp**.
 
 ## Use
 
